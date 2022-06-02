@@ -1,0 +1,321 @@
+---
+title: "ST2195 Coursework"
+author: "Elaine"
+date: '2022-03-30'
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+#Commercial Flight Analysis & Prediction
+dataset: https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/HG7NV7 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+set working directory 
+```{r}
+getwd()
+setwd('C:\\Users\\USER\\Desktop\\uni')
+```
+import basic libraries
+```{r}
+library("DBI")
+library("dplyr")
+library("ggplot2")
+library("purrr")
+library("corrr")
+library("ggpubr")
+library("ggcorrplot")
+library("corrplot")
+library("superml")
+library("caTools")
+library("ROCR")
+library("caret")
+```
+
+## Import Dataset
+Due to memory problem, we will directly use dataset that we already clean from Jupyter Markdown. Originally, from the merged 2006 and 2007 flight dataset we have 14.595,137 rows. The following are the list of data cleaning we have done:
+1. Removed 34 rows duplicated data  
+2. Removed 282,682 rows of data that has 'Cancellled == 1' because we mainly need data of uncancelled flight 
+3. Removed CancellationCode column as it is not relevant anymore as we already deleted all cancelled data 
+4. Removed 33,364 rows of data that has NA values on ActualElapsedTime as we want completed cases only
+5. Removed one row inconsistent data at index 14,540,614 because in this row the flight was not cancelled but has a cancellation code which is illogical.
+So, we are left with 14,279,056 rows and 26 columns for merged flight data 2006 & 2007
+```{r dataset}
+df <- read.csv("coursework_flight.csv")
+df = subset(df, select= -c(Cancelled, Diverted))
+```
+```{r}
+summary(df)
+```
+
+## Question 1: When is the best time of day, month, and year to fly to minimize delay? 
+Best time of day with lowest average delay: Saturday
+```{r}
+delayDay <- df%>%
+  group_by(DayOfWeek)%>%
+  summarise(avgDelay = mean(ArrDelay, na.rm = TRUE))%>%
+  arrange(avgDelay)
+
+delayDay
+```
+```{r}
+ggplot(df, aes(DayOfWeek, ArrDelay)) +
+  geom_bar(position = "dodge", stat = "summary", fun = "mean") +
+  scale_x_continuous(breaks = c(1:7), labels = factor(1:7), limits = c(0,8)) +
+  theme(axis.text.x=element_text(size = 8, angle = 0, hjust = 0, vjust = 0.5)) +
+  ggtitle("Average Delay in Minutes per Day") +
+  geom_hline(yintercept = 15)
+```
+
+Best time of date with lowest average delay: 3-9
+```{r}
+delayDate <- df %>%
+  group_by(DayofMonth)%>%
+  summarise(avgDelay = mean(ArrDelay, na.rm = TRUE))%>%
+  arrange(avgDelay)
+
+delayDate
+```
+```{r}
+ggplot(df, aes(DayofMonth, ArrDelay)) +
+  geom_bar(position = "dodge", stat = "summary", fun = "mean") +
+  scale_x_continuous(breaks = c(1:31), labels = factor(1:31), limits = c(0,32)) +
+  theme(axis.text.x=element_text(size = 8, angle = 0, hjust = 0, vjust = 0.5)) +
+  ggtitle("Average Delay in Minutes per Day of Month") +
+  geom_hline(yintercept = 15)
+```
+
+Best time of month with lowest average delay: September and November 
+```{r}
+delayMonth <- df%>%
+  group_by(Month)%>%
+  summarise(avgDelay = mean(ArrDelay, na.rm = TRUE))%>%
+  arrange(avgDelay)
+
+delayMonth
+```
+```{r}
+ggplot(df, aes(Month, ArrDelay)) +
+  geom_bar(position = "dodge", stat = "summary", fun = "mean") +
+  scale_x_continuous(breaks = c(1:12), labels = factor(1:12), limits = c(0,13)) +
+  theme(axis.text.x=element_text(size = 8, angle = 0, hjust = 0, vjust = 0.5)) +
+  ggtitle("Average Delay in Minutes per Month") +
+  geom_hline(yintercept = 15)
+```
+
+## Question 2: Do older planes suffer more delays?
+Due to memory problem we will directly load data that has been merged from Python. In df2, we merged df with the plane_data using the TailNum to get the airline year of manufactured in order to calculate the age
+```{r dataset2}
+df2 <- read.csv("coursework_flight2.csv")
+```
+
+Calculate Age 
+```{r}
+df2$Age <- (df2$Year - df2$year)
+```
+
+Define Delay
+```{r}
+df2$Delayed <- ifelse(df2$CarrierDelay!=0 | df2$WeatherDelay!=0 | df2$NASDelay!=0| df2$SecurityDelay!=0 | df2$LateAircraftDelay!=0, 1, 0)
+
+```
+
+```{r}
+df2_age <- df2 %>%
+  filter(!is.na(Age)) %>%
+  mutate(Age = if_else(Age > 25, 25L, Age)) %>%
+  group_by(Age) %>%
+  summarise( DepDelayMean = mean(DepDelay, na.rm=TRUE),
+             ArrDelayMean = mean(ArrDelay, na.rm = TRUE))
+
+df2_age
+```
+
+```{r}
+ggplot(df2_age, aes(x = Age, y = DepDelayMean)) +
+  geom_point() +
+  scale_x_continuous("Age ", breaks = seq(0, 30, by = 10)) +
+  scale_y_continuous("Average Departure Delay") +
+  ggtitle("Age VS Departure Delay")
+```
+```{r}
+ggplot(df2_age, aes(x = Age, y = ArrDelayMean)) +
+  geom_point() +
+  scale_x_continuous("Age ", breaks = seq(0, 30, by = 10)) +
+  scale_y_continuous("Average Arrival Delay") +
+  ggtitle("Age VS Arrival Delay")
+```
+
+```{r}
+df2.cor <- df2_age[, c("DepDelayMean", "ArrDelayMean", "Age")]
+df2.cor <- cor(df2.cor)
+df2.cor
+```
+
+```{r}
+chisq.test(df2$Age, df2$Delayed, correct = FALSE)
+```
+
+## Question 3: How does the number of people flying between various locations change over time 
+
+```{r}
+airports <- read.csv("airports.csv")
+```
+
+1. Merge to Destination 
+```{r}
+df3_6 <- df %>%
+  filter(Year == 2006)%>%
+  inner_join(airports, by = c("Dest"="iata")) %>%
+  group_by(Year, city) %>%
+  summarise(total = n()) %>%
+  arrange(desc(total)) %>%
+  slice(1:10)
+
+df3_7 <- df %>%
+  filter(Year == 2007)%>%
+  inner_join(airports, by = c("Dest"="iata")) %>%
+  group_by(Year, city) %>%
+  summarise(total = n()) %>%
+  arrange(desc(total)) %>%
+  slice(1:10)
+
+df3 <- rbind(df3_6, df3_7)
+df3
+```
+```{r}
+ggplot(df3, aes(x=city, y=total, fill=factor(Year))) + 
+  geom_bar(stat="identity", width=0.5, position=position_dodge(width=0.6)) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_y_continuous(labels = scales::comma)+
+  ggtitle("Total Number of People Between Different Destination Over Time")
+  
+```
+
+2. Merge to Origin
+```{r}
+df4_6 <- df %>%
+  filter(Year == 2006)%>%
+  inner_join(airports, by = c("Origin"="iata")) %>%
+  group_by(Year, city) %>%
+  summarise(total = n()) %>%
+  arrange(desc(total)) %>%
+  slice(1:10)
+
+df4_7 <- df %>%
+  filter(Year == 2007)%>%
+  inner_join(airports, by = c("Origin"="iata")) %>%
+  group_by(Year, city) %>%
+  summarise(total = n()) %>%
+  arrange(desc(total)) %>%
+  slice(1:10)
+
+df4 <- rbind(df4_6, df4_7)
+df4
+```
+
+```{r}
+ggplot(df4, aes(x=city, y=total, fill=factor(Year))) + 
+  geom_bar(stat="identity", width=0.5, position=position_dodge(width=0.6)) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_y_continuous(labels = scales::comma) +
+  ggtitle("Total Number of People Between Different Origin Over Time")
+
+```
+
+## Question 4: Can you detect cascading failures as delays in one airport create delays in others?  
+
+```{r}
+lagged_df <- df %>%
+  arrange(Origin, Month, DayofMonth, DepTime) %>%
+  group_by(Origin) %>%
+  mutate(DepDelayLagged = lag(DepDelay)) %>%
+  filter(!is.na(DepDelay), !is.na(DepDelayLagged))
+
+lagged_df
+```
+
+```{r}
+lagged_df2 <- lagged_df %>%
+  group_by(DepDelayLagged) %>%
+  summarise(DepDelayMean = mean(DepDelay)) %>%
+  filter(DepDelayLagged > 0)
+ 
+lagged_df2
+```
+
+
+```{r}
+ ggplot(lagged_df2, aes(y = DepDelayMean, x = DepDelayLagged)) +
+  geom_point() +
+  scale_x_continuous(breaks = seq(0, 1500, by = 120)) +
+  labs(y = "Departure Delay", x = "Previous Departure Delay") +
+  ggtitle("Departure Delay VS Previous Departure Delay")
+```
+```{r}
+lagged_df %>%
+  group_by(DepDelayLagged) %>%
+  summarise(DepDelayMean = mean(DepDelay)) %>%
+  ggplot(aes(y = DepDelayMean, x = DepDelayLagged)) +
+  geom_point() +
+  scale_x_continuous(breaks = seq(0, 1500, by = 120)) +
+  labs(y = "Departure Delay", x = "Previous Departure Delay")
+```
+
+## Question 5: Machine Learning
+
+```{r}
+data = subset(df, select= -c(Year, TailNum, FlightNum))
+```
+
+```{r}
+data <- data %>%
+  mutate(Delayed = if_else(ArrDelay >= 15, 1,0))
+```
+
+Label Encoding categorical data 
+```{r}
+encode <- LabelEncoder$new()
+
+data$Origin <- encode$fit_transform(data$Origin)
+data$Dest <- encode$fit_transform(data$Dest)
+data$UniqueCarrier <- encode$fit_transform(data$UniqueCarrier)
+```
+
+standardize numerical data
+```{r}
+scaled = scale(data)
+scaled
+```
+drop unnecessary columns for machine learning 
+```{r}
+data2 = subset(scaled, select= -c(CRSDepTime, CRSArrTime, CRSElapsedTime, ArrDelay, DepDelay, CarrierDelay, WeatherDelay, NASDelay, SecurityDelay,
+                                LateAircraftDelay))
+```
+
+split data
+```{r}
+set.seed(42)
+
+split_set = sample.split(data$Delayed, SplitRatio = 0.8)
+train_set = subset(data, split_set == TRUE)
+test_set = subset(data, split_set == FALSE)
+```
+
+train data:
+we have to cut down many variables due to memory error
+```{r}
+logistic <- glm(Delayed ~ DepTime + ArrTime + UniqueCarrier, data = train_set, family = "binomial")
+summary(logistic)
+```
+
+```{r}
+prob <- predict(logistic, newdata = test_set, type = "response")
+prediction <- ifelse(prob > 0.5, 1, 0)
+
+confusionMatrix(factor(prediction), factor(test_set$Delayed), positive = as.character(1))
+
+```
